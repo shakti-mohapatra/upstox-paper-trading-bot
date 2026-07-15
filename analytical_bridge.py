@@ -18,7 +18,7 @@ def write_params(instrument: str, path: str = "strategy_params.json") -> None:
         "instrument": instrument,
         "enabled": True,
         "regime": "range",
-        "entry_zone": {"low": 0.0, "high": 0.0},
+        "entry_zone": {"low": 0.0, "high": 1_000_000.0},  # stub: wide-open, no live signal yet
         "target_pct": 1.0,
         "stop_loss_pct": 0.5,
         "trail_pct": 0.3,

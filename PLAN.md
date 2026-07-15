@@ -1,6 +1,6 @@
 # JARVIS-Trader — Project Plan
 
-**Status:** Planning complete, scaffolding pending
+**Status:** Fully wired (`main.py`), 34 tests green, kill switch + reconnect-backoff (resets on clean connect) in place; next = first real paper session against live Upstox
 **Owner:** shaktibuilds
 **Created:** 2026-07-15
 **Location:** `E:\Trading-bot`
@@ -158,9 +158,25 @@ Both are ~5–10 lines, both needed even in the full Ollama version.
 
 ## 8. Open items / prerequisites
 
-- [ ] Create Upstox Developer App → get `api_key` + `api_secret` (Step 0, user).
-- [ ] Confirm default instrument = most-traded liquid NSE large-cap for smoke test.
-- [ ] Scaffold the files above (next session).
+- [x] Create Upstox Developer App → get `api_key` + `api_secret` (Step 0, user).
+- [x] Confirm default instrument = most-traded liquid NSE large-cap for smoke test.
+      `NSE_EQ|INE002A01018` (RELIANCE) — liquidity pick for the paper smoke
+      test only, not investment advice; final return-based pick is user's
+      call before live.
+- [x] Scaffold the files above.
+- [x] Phase 1 real logic: `websocket_listener.py` (v3 feed, protobuf ltpc
+      decode via `MarketDataFeed.proto`) + `execution_engine.py`
+      (entry-zone/regime gating, target/stop-loss/trailing-stop exits) +
+      `broker/paper.py` (instant fill at the real observed tick price).
+- [x] Daily max-loss kill switch in `execution_engine.py` (checked on
+      realized pnl at each exit, halts new entries) + reconnect-with-backoff
+      (capped 60s) in `websocket_listener.run_forever()`.
+- [x] Wired `auth.py` + `websocket_listener.py` + `execution_engine.py` +
+      `broker/paper.py` into runnable `main.py` (`build_system()` +
+      `run()`). 34 tests, TDD red-green throughout.
+- [ ] Run first live paper session (market hours) to confirm real Upstox
+      auth + v3 feed + fills end-to-end - nothing here has touched a real
+      token or a real socket yet, only mocked tests.
 - [ ] Decide on `upstox-totp` auto-login (ToS-grey) before live.
 - [ ] Verify Oracle VM egress IP == reserved static IP before registering (at go-live).
 

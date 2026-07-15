@@ -18,3 +18,12 @@ def test_write_params_creates_frozen_schema_atomically():
         assert data["instrument"] == "NSE_EQ|TEST"
         assert "target_pct" in data
         assert not os.path.exists(path + ".tmp")
+
+
+def test_write_params_entry_zone_is_not_degenerate():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "strategy_params.json")
+        write_params("NSE_EQ|TEST", path=path)
+        with open(path) as f:
+            data = json.load(f)
+        assert data["entry_zone"]["low"] < data["entry_zone"]["high"]
