@@ -17,7 +17,7 @@ def test_build_system_wires_listener_ticks_into_engine(tmp_path):
     assert listener.instruments == [INSTRUMENT]
     assert engine.params["instrument"] == INSTRUMENT
 
-    entry_price = engine.params["entry_zone"]["low"]
+    entry_price = 100.0  # any real (non-zero) price inside the stub's wide-open entry_zone
     asyncio.run(listener.on_tick({"instrument": INSTRUMENT, "ltp": entry_price}))
 
     assert engine.position is not None

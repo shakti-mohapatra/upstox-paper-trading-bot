@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import requests
 import websockets
@@ -19,15 +20,16 @@ import websockets
 import MarketDataFeed_pb2 as pb
 
 AUTHORIZE_URL = "https://api.upstox.com/v3/feed/market-data-feed/authorize"
+IST = timezone(timedelta(hours=5, minutes=30))
 
 log = logging.getLogger(__name__)
 
 
-def decode_feed_response(raw: bytes) -> dict[str, float]:
+def decode_feed_response(raw: bytes) -> dict[str, dict]:
     response = pb.FeedResponse()
     response.ParseFromString(raw)
     return {
-        instrument: feed.ltpc.ltp
+        instrument: {"ltp": feed.ltpc.ltp, "ltt": feed.ltpc.ltt}
         for instrument, feed in response.feeds.items()
         if feed.HasField("ltpc")
     }
@@ -58,8 +60,9 @@ class WebSocketListener:
             )
             await ws.send(subscribe_msg)
             async for raw in ws:
-                for instrument, ltp in decode_feed_response(raw).items():
-                    await self.on_tick({"instrument": instrument, "ltp": ltp})
+                for instrument, feed in decode_feed_response(raw).items():
+                    ts = datetime.fromtimestamp(feed["ltt"] / 1000, tz=IST).isoformat()
+                    await self.on_tick({"instrument": instrument, "ltp": feed["ltp"], "ts": ts})
 
     async def on_tick(self, tick: dict):
         raise NotImplementedError("TODO: dispatch tick to execution_engine")

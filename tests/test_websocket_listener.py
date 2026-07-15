@@ -15,14 +15,15 @@ def test_stores_access_token_and_instruments():
     assert listener.instruments == ["NSE_EQ|abc"]
 
 
-def test_decode_feed_response_extracts_ltp_per_instrument():
+def test_decode_feed_response_extracts_ltp_and_ltt_per_instrument():
     response = pb.FeedResponse()
     response.feeds["NSE_EQ|abc"].ltpc.ltp = 101.25
+    response.feeds["NSE_EQ|abc"].ltpc.ltt = 1752640560000  # epoch ms
     raw = response.SerializeToString()
 
     result = decode_feed_response(raw)
 
-    assert result == {"NSE_EQ|abc": 101.25}
+    assert result == {"NSE_EQ|abc": {"ltp": 101.25, "ltt": 1752640560000}}
 
 
 def test_authorize_returns_wss_url_using_bearer_token(monkeypatch):
@@ -79,6 +80,7 @@ class FakeConnect:
 def test_connect_subscribes_then_decodes_and_dispatches_ticks(monkeypatch):
     response = pb.FeedResponse()
     response.feeds["NSE_EQ|abc"].ltpc.ltp = 101.25
+    response.feeds["NSE_EQ|abc"].ltpc.ltt = 1784173560000  # 2026-07-16 09:16:00 IST
     fake_ws = FakeWebSocket([response.SerializeToString()])
 
     listener = WebSocketListener("token-123", ["NSE_EQ|abc"])
@@ -97,7 +99,7 @@ def test_connect_subscribes_then_decodes_and_dispatches_ticks(monkeypatch):
     subscribed = json.loads(fake_ws.sent[0])
     assert subscribed["method"] == "sub"
     assert subscribed["data"] == {"mode": "ltpc", "instrumentKeys": ["NSE_EQ|abc"]}
-    assert received == [{"instrument": "NSE_EQ|abc", "ltp": 101.25}]
+    assert received == [{"instrument": "NSE_EQ|abc", "ltp": 101.25, "ts": "2026-07-16T09:16:00+05:30"}]
 
 
 def test_run_forever_retries_connect_with_backoff_until_max_retries(monkeypatch):

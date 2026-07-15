@@ -4,6 +4,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import csv
+
+import pytest
+
+from costs import costs
 from execution_engine import ExecutionEngine
 
 INSTRUMENT = "NSE_EQ|TEST"
@@ -190,6 +195,117 @@ def test_on_tick_trailing_stop_locks_in_gains_below_hard_stop(tmp_path):
 
     assert broker.calls[-1] == (INSTRUMENT, "SELL", 10, 100.4)
     assert engine.position is None
+
+
+def test_on_tick_realized_pnl_is_net_of_entry_and_exit_costs(tmp_path):
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path)
+    engine.load_params()
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.0})  # entry, hard stop = 99.5
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 99.5})  # stopped out
+
+    gross = (99.5 - 100.0) * 10
+    entry_cost = costs("BUY", 10, 100.0)
+    exit_cost = costs("SELL", 10, 99.5)
+    expected_net = gross - entry_cost - exit_cost
+    assert engine.realized_pnl_today == pytest.approx(expected_net)
+
+
+def test_on_tick_logs_entry_and_exit_fills_to_trade_log(tmp_path):
+    params_path = str(tmp_path / "strategy_params.json")
+    write_params(params_path)
+    log_path = str(tmp_path / "trades.csv")
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=params_path, trade_log_path=log_path)
+    engine.load_params()
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 99.0, "ts": "2026-07-16T09:16:00+05:30"})  # orb window
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.0, "ts": "2026-07-16T09:31:00+05:30"})
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 99.5, "ts": "2026-07-16T09:32:00+05:30"})
+
+    with open(log_path, newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    assert len(rows) == 2
+    assert rows[0]["side"] == "BUY"
+    assert rows[0]["reason"] == "entry"
+    assert rows[0]["ts"] == "2026-07-16T09:31:00+05:30"
+    assert rows[1]["side"] == "SELL"
+    assert rows[1]["reason"] == "stop_loss"
+    assert float(rows[1]["net"]) == pytest.approx((99.5 - 100.0) * 10 - costs("SELL", 10, 99.5))
+
+
+def test_on_tick_forces_square_off_at_1515_ist_regardless_of_target_or_stop(tmp_path):
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path)
+    engine.load_params()
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 99.0, "ts": "2026-07-16T09:16:00+05:30"})  # orb window
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.0, "ts": "2026-07-16T09:31:00+05:30"})  # entry
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.2, "ts": "2026-07-16T15:15:00+05:30"})  # neither target nor stop
+
+    assert broker.calls[-1] == (INSTRUMENT, "SELL", 10, 100.2)
+    assert engine.position is None
+
+
+def test_on_tick_skips_entry_after_1500_ist(tmp_path):
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path)
+    engine.load_params()
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.5, "ts": "2026-07-16T15:00:00+05:30"})
+
+    assert broker.calls == []
+    assert engine.position is None
+
+
+def test_on_tick_never_enters_during_orb_window_even_if_price_is_inside_entry_zone(tmp_path):
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path)
+    engine.load_params()
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.5, "ts": "2026-07-16T09:20:00+05:30"})
+
+    assert broker.calls == []
+    assert engine.position is None
+
+
+def test_on_tick_enters_only_on_breakout_above_orb_high_after_window_closes(tmp_path):
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path)
+    engine.load_params()
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 99.0, "ts": "2026-07-16T09:16:00+05:30"})  # orb window
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.0, "ts": "2026-07-16T09:25:00+05:30"})  # orb window, high=100.0
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.0, "ts": "2026-07-16T09:31:00+05:30"})  # not a breakout (==high)
+
+    assert broker.calls == []
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.5, "ts": "2026-07-16T09:32:00+05:30"})  # breaks above 100.0
+
+    assert broker.calls == [(INSTRUMENT, "BUY", 10, 100.5)]
+
+
+def test_on_tick_entry_qty_uses_risk_based_sizing_when_ceiling_is_generous(tmp_path):
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path, max_position_qty=100000)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path)
+    engine.load_params()
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.5})
+
+    assert broker.calls == [(INSTRUMENT, "BUY", 995, 100.5)]  # risk-sized, not the 100000 ceiling
 
 
 def test_on_tick_halts_new_entries_after_daily_max_loss_breached(tmp_path):
