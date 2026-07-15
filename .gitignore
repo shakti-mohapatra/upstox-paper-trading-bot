@@ -1,0 +1,9 @@
+.env
+logs/
+__pycache__/
+*.pyc
+strategy_params.json
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

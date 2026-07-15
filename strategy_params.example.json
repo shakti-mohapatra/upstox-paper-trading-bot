@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "generated_at": "2026-07-15T00:00:00+00:00",
+  "instrument": "NSE_EQ|dummy-instrument-key",
+  "enabled": true,
+  "regime": "range",
+  "entry_zone": {"low": 0.0, "high": 0.0},
+  "target_pct": 1.0,
+  "stop_loss_pct": 0.5,
+  "trail_pct": 0.3,
+  "max_position_qty": 1,
+  "notes": "stub: static placeholder params, no live signal yet"
+}
