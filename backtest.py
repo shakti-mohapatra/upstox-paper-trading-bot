@@ -10,9 +10,9 @@ import os
 
 from broker.paper import PaperBroker
 from execution_engine import ExecutionEngine
-from strategy import MACrossoverStrategy, ORBStrategy
+from strategy import MACrossoverStrategy, ORBStrategy, ORBv2Strategy
 
-STRATEGIES = {"orb": ORBStrategy, "ma_crossover": MACrossoverStrategy}
+STRATEGIES = {"orb": ORBStrategy, "ma_crossover": MACrossoverStrategy, "orb_v2": ORBv2Strategy}
 
 
 def load_candles(path: str) -> list[dict]:

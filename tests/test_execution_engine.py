@@ -155,6 +155,39 @@ def test_on_tick_enters_long_when_price_inside_entry_zone(tmp_path):
     assert engine.position["entry_price"] == 100.5
 
 
+class FakeStrategy:
+    """Enters unconditionally with a caller-supplied stop_loss_pct override,
+    so tests can prove the engine actually uses it for sizing instead of the
+    frozen params value."""
+
+    def __init__(self, stop_loss_pct):
+        self.stop_loss_pct = stop_loss_pct
+
+    def new_day(self):
+        pass
+
+    def signal(self, tick, params, position):
+        if position is not None:
+            return {"action": "hold"}
+        return {"action": "enter", "stop_loss_pct": self.stop_loss_pct}
+
+
+def test_on_tick_entry_sizing_uses_strategys_stop_loss_pct_override(tmp_path):
+    from position_sizing import size_position
+
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path, stop_loss_pct=0.5, max_position_qty=100000)  # params says 0.5; strategy overrides to 6.0 (large enough to escape the 20%-turnover ceiling both would otherwise share)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path, strategy=FakeStrategy(stop_loss_pct=6.0))
+    engine.load_params()
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.5})
+
+    expected_qty = size_position(capital=100000.0, risk_pct=0.01, entry_price=100.5, stop_loss_pct=6.0, buying_power=100000.0)
+    assert engine.position["qty"] == expected_qty
+    assert expected_qty != size_position(capital=100000.0, risk_pct=0.01, entry_price=100.5, stop_loss_pct=0.5, buying_power=100000.0)
+
+
 def test_on_tick_does_not_re_enter_while_already_in_position(tmp_path):
     path = str(tmp_path / "strategy_params.json")
     write_params(path)

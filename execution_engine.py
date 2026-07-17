@@ -110,7 +110,7 @@ class ExecutionEngine:
                 capital=CAPITAL,
                 risk_pct=RISK_PCT,
                 entry_price=ltp,
-                stop_loss_pct=self.params["stop_loss_pct"],
+                stop_loss_pct=signal.get("stop_loss_pct", self.params["stop_loss_pct"]),
                 buying_power=CAPITAL,
             )
             qty = min(risk_qty, self.params["max_position_qty"])

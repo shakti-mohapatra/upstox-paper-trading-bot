@@ -1,9 +1,11 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from strategy import MACrossoverStrategy, ORBStrategy, Strategy
+from strategy import MACrossoverStrategy, ORBStrategy, ORBv2Strategy, Strategy
 
 
 def tick(ltp, ts=None):
@@ -145,3 +147,109 @@ def test_ma_crossover_holds_before_a_direction_is_established():
     result = strat.signal(tick(100.0), {}, None)
 
     assert result == {"action": "hold"}
+
+
+def test_orb_v2_strategy_is_a_strategy():
+    assert isinstance(ORBv2Strategy(), Strategy)
+
+
+def test_orb_v2_holds_and_accumulates_range_during_window():
+    strat = ORBv2Strategy()
+
+    result = strat.signal(tick(100.0, "09:16:00"), {}, None)
+
+    assert result == {"action": "hold"}
+    assert strat.range_high == 100.0
+    assert strat.range_low == 100.0
+
+
+def test_orb_v2_no_entry_when_no_prior_day_close_to_measure_gap():
+    strat = ORBv2Strategy()
+    strat.signal(tick(100.0, "09:16:00"), {}, None)
+    strat.signal(tick(102.0, "09:29:00"), {}, None)
+
+    result = strat.signal(tick(200.0, "09:35:00"), {}, None)
+
+    assert result == {"action": "hold"}
+
+
+def _seed_gap_ok_orb_v2(day1_close=100.0):
+    """Runs one full day (window + a post-window hold) so day 2 has a prior
+    close to measure a gap against, then rolls to day 2."""
+    strat = ORBv2Strategy()
+    strat.signal(tick(day1_close, "09:16:00"), {}, None)
+    strat.signal(tick(day1_close, "09:35:00"), {}, None)
+    strat.new_day()
+    return strat
+
+
+def test_orb_v2_skips_entry_when_gap_outside_filter_band():
+    strat = _seed_gap_ok_orb_v2(day1_close=100.0)
+    strat.signal(tick(100.05, "09:16:00"), {}, None)
+    strat.signal(tick(102.0, "09:29:00"), {}, None)
+
+    result = strat.signal(tick(200.0, "09:35:00"), {}, None)
+
+    assert result == {"action": "hold"}
+
+
+def test_orb_v2_skips_entry_when_range_too_tight():
+    strat = _seed_gap_ok_orb_v2(day1_close=100.0)
+    strat.signal(tick(101.0, "09:16:00"), {}, None)
+    strat.signal(tick(101.1, "09:29:00"), {}, None)
+
+    result = strat.signal(tick(200.0, "09:35:00"), {}, None)
+
+    assert result == {"action": "hold"}
+
+
+def test_orb_v2_enters_on_breakout_above_range_high_plus_confirmation():
+    strat = _seed_gap_ok_orb_v2(day1_close=100.0)
+    strat.signal(tick(101.0, "09:16:00"), {}, None)
+    strat.signal(tick(102.0, "09:29:00"), {}, None)
+    strat.signal(tick(101.5, "09:31:00"), {}, None)
+
+    result = strat.signal(tick(102.2, "09:32:00"), {}, None)
+
+    assert result["action"] == "enter"
+    assert result["stop_loss_pct"] == pytest.approx((102.2 - 101.0) / 102.2 * 100)
+
+
+def test_orb_v2_no_new_entries_after_max_hold_cutoff():
+    strat = _seed_gap_ok_orb_v2(day1_close=100.0)
+    strat.signal(tick(101.0, "09:16:00"), {}, None)
+    strat.signal(tick(102.0, "09:29:00"), {}, None)
+
+    result = strat.signal(tick(200.0, "11:05:00"), {}, None)
+
+    assert result == {"action": "hold"}
+
+
+def test_orb_v2_exits_at_range_derived_target():
+    strat = ORBv2Strategy()
+    strat._entry_target_price = 110.0
+    strat._entry_stop_price = 90.0
+
+    result = strat.signal(tick(110.0), {}, {"entry_price": 100.0})
+
+    assert result == {"action": "exit", "reason": "target"}
+
+
+def test_orb_v2_exits_at_range_low_stop():
+    strat = ORBv2Strategy()
+    strat._entry_target_price = 110.0
+    strat._entry_stop_price = 90.0
+
+    result = strat.signal(tick(90.0), {}, {"entry_price": 100.0})
+
+    assert result == {"action": "exit", "reason": "stop_loss"}
+
+
+def test_orb_v2_exits_at_max_hold_time_when_still_in_position():
+    strat = ORBv2Strategy()
+    strat._entry_target_price = 999.0
+    strat._entry_stop_price = 1.0
+
+    result = strat.signal(tick(100.0, "11:00:00"), {}, {"entry_price": 100.0})
+
+    assert result == {"action": "exit", "reason": "max_hold"}

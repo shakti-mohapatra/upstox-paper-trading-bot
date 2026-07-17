@@ -41,6 +41,12 @@ def test_strategies_registry_includes_ma_crossover():
     assert STRATEGIES["ma_crossover"] is MACrossoverStrategy
 
 
+def test_strategies_registry_includes_orb_v2():
+    from strategy import ORBv2Strategy
+
+    assert STRATEGIES["orb_v2"] is ORBv2Strategy
+
+
 def test_candle_to_tick_maps_close_and_timestamp():
     candle = {"timestamp": "2026-07-16T09:16:00+05:30", "open": "99.0", "high": "99.5", "low": "98.5", "close": "99.2", "volume": "1000"}
 
