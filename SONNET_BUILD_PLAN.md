@@ -131,11 +131,81 @@ window" framing doesn't apply to this strategy. Worth fixing in
 `walk_forward.py` if a future params-driven strategy needs real grid search
 alongside a params-ignoring one, but not blocking — flagged, not fixed.
 
-**Next:** ask the user before building strategy #3, wiring short entries into
-ORBv2 (the natural next lever — doubles the tradeable setups and the doc's own
-spec wants it), or moving to forward-paper on whichever candidate. Multi-
-instrument, `full`/depth subscription, and the live gate remain out of scope
-until a strategy clears the negative baseline.
+---
+
+### ORBv2 short entries — built and tested 2026-07-17. Result: made it worse. Reverted to long-only as the standing recommendation.
+
+Before building, did real research (WebSearch, not assumption) on whether a
+long+short combo has published evidence: a Nifty-index ORB backtest
+(intradaylab.com, retail source — treat as a lead, not proof) found **shorts
+generated 75% of ORB profits**, attributed to "markets fall faster than they
+rise" (a real, widely-documented volatility asymmetry). That was the
+justification for building this.
+
+**Engine change** (the actual scope this required): `Strategy.signal()`'s
+"enter" response can now carry `"side": "short"`; `execution_engine.on_tick`
+opens with SELL/closes with BUY for shorts (symmetric slippage/cost/pnl to
+the long path), tracks `low_water` alongside `high_water`. Backward
+compatible — `ORBStrategy`/`MACrossoverStrategy` never set `side`, default to
+`"long"`, unaffected (128 pre-existing tests stayed green throughout).
+`ORBv2Strategy` got a mirrored breakdown-below-range-low entry, stop=range
+high, target=max distance below entry, side-aware exit comparisons. 6 new
+tests (TDD, some via the Bash-write verification-test workaround, same as
+before). 132 tests green.
+
+**Real result, same holdout, broken down by side (parsed from the actual
+per-fill trade log, not assumed):**
+
+| | Long-only ORBv2 | **+ shorts** |
+|---|---|---|
+| Holdout trades | 16 | **36** (16 long + 20 short) |
+| Holdout net_pnl | -₹814.86 | **-₹1661.18** |
+| Holdout win_rate | 25.0% | 30.6% (long side alone: 25.0%, short side alone: 35.0%) |
+| Holdout max_drawdown | ₹1053 | **₹1742** |
+| Windows net-negative | 13/13 | 13/13 |
+
+Long-side numbers are byte-identical to the long-only run (correct — adding
+shorts doesn't touch long logic). **Short trades alone: -₹846.33 net, 35% win
+rate — better win rate than longs, but still net-negative, and adding them
+roughly doubled trade count and made the combined total ~2× worse.** The
+Nifty-index research finding did not transfer to RELIANCE over this holdout
+period. Single stock, single 90-day OOS window, real result — not spun to
+match the research lead. **Standing recommendation reverted to long-only
+ORBv2** (still the best real candidate at -₹814.86) until/unless a different
+instrument or period shows the short-side asymmetry actually holding. The
+short-entry *code* stays (correct, tested, useful for a future strategy that
+might use it better, e.g. VWAP mean-reversion naturally wants both
+directions) — just not switched on as the recommended config.
+
+**Other research done same session, not yet acted on:**
+- Volume-confirmed breakouts have real evidence (Bulkowski stats: 65% success
+  with volume ≥1.5× average vs 39% without) — **blocked**, not built: the live
+  feed is Upstox `ltpc` mode with no volume field (session-4 finding,
+  `websocket_listener.py`). A volume filter would work in backtest (candles
+  carry `volume`) and silently do nothing (or silently block everything) live
+  — same class of invisible bug this project has been burned by before. Needs
+  a `full`/depth subscription upgrade first, which is already flagged
+  out-of-scope elsewhere in this doc.
+- VWAP mean-reversion has the strongest published evidence of any candidate
+  considered so far (Journal of Portfolio Management: 57% win rate, 1.7:1
+  R:R, 4,200 documented S&P trades; independent QuantConnect backtest: 61-63%
+  win rate on liquid names) — stronger than anything found for ORB or MA
+  crossover. Not built. Genuinely the strongest lead if the next move is a
+  strategy pivot rather than another ORB filter.
+- A recent falsification study (arXiv 2605.04004, MNQ futures 5-min OHLCV
+  signals) found realistic round-trip costs eliminate the *entire* gross edge
+  of next-bar-open systematic signals in every case tested — consistent with
+  this project's own repeated empirical finding (every strategy tried here is
+  net-negative after real costs). Tempers expectations honestly: a
+  cost-surviving intraday edge on OHLCV data alone is hard by design, not a
+  sign anything here is being done wrong.
+
+**Next:** ask the user before building strategy #3 (VWAP mean-reversion has
+the strongest evidence, if the direction is a strategy pivot), trying a
+different instrument/period for the short-side hypothesis, or moving to
+forward-paper on long-only ORBv2 as-is. Multi-instrument, `full`/depth
+subscription, and the live gate remain out of scope until a strategy clears
+the negative baseline.
 
 ### The dashboard (already built, needs one small thing)
 

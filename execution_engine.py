@@ -116,30 +116,37 @@ class ExecutionEngine:
             qty = min(risk_qty, self.params["max_position_qty"])
             if qty <= 0 or qty * ltp < MIN_TURNOVER:
                 return
-            self.broker.place_order(self.params["instrument"], "BUY", qty, ltp)
-            entry_fill = ltp * (1 + SLIPPAGE_PCT)
-            entry_cost = costs("BUY", qty, entry_fill)
-            self.position = {"qty": qty, "entry_price": ltp, "entry_fill": entry_fill, "high_water": ltp, "entry_cost": entry_cost}
+            side = signal.get("side", "long")
+            order_side = "BUY" if side == "long" else "SELL"
+            self.broker.place_order(self.params["instrument"], order_side, qty, ltp)
+            entry_fill = ltp * (1 + SLIPPAGE_PCT) if side == "long" else ltp * (1 - SLIPPAGE_PCT)
+            entry_cost = costs(order_side, qty, entry_fill)
+            self.position = {"qty": qty, "side": side, "entry_price": ltp, "entry_fill": entry_fill, "high_water": ltp, "low_water": ltp, "entry_cost": entry_cost}
             self.realized_pnl_today -= entry_cost
             self.trades_today += 1
-            self._log_fill(tick, "BUY", qty, ltp, entry_fill, gross=0.0, cost=entry_cost, reason="entry")
+            self._log_fill(tick, order_side, qty, ltp, entry_fill, gross=0.0, cost=entry_cost, reason="entry")
             return
 
         pos = self.position
         pos["high_water"] = max(pos["high_water"], ltp)
+        pos["low_water"] = min(pos["low_water"], ltp)
 
         square_off = tick_time is not None and tick_time >= SQUARE_OFF_TIME
         signal = {"action": "exit", "reason": "square_off"} if square_off else self.strategy.signal(tick, self.params, pos)
 
         if signal["action"] == "exit":
-            self.broker.place_order(self.params["instrument"], "SELL", pos["qty"], ltp)
+            exit_order_side = "SELL" if pos["side"] == "long" else "BUY"
+            self.broker.place_order(self.params["instrument"], exit_order_side, pos["qty"], ltp)
             self.position = None
-            exit_fill = ltp * (1 - SLIPPAGE_PCT)
-            exit_cost = costs("SELL", pos["qty"], exit_fill)
-            gross = (exit_fill - pos["entry_fill"]) * pos["qty"]
+            exit_fill = ltp * (1 - SLIPPAGE_PCT) if pos["side"] == "long" else ltp * (1 + SLIPPAGE_PCT)
+            exit_cost = costs(exit_order_side, pos["qty"], exit_fill)
+            if pos["side"] == "long":
+                gross = (exit_fill - pos["entry_fill"]) * pos["qty"]
+            else:
+                gross = (pos["entry_fill"] - exit_fill) * pos["qty"]
             net = gross - exit_cost
             self.realized_pnl_today += net
-            self._log_fill(tick, "SELL", pos["qty"], ltp, exit_fill, gross=gross, cost=exit_cost, reason=signal["reason"])
+            self._log_fill(tick, exit_order_side, pos["qty"], ltp, exit_fill, gross=gross, cost=exit_cost, reason=signal["reason"])
             if net < 0:
                 self.consecutive_losses += 1
                 if self.consecutive_losses >= 3:

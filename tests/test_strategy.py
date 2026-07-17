@@ -225,6 +225,51 @@ def test_orb_v2_no_new_entries_after_max_hold_cutoff():
     assert result == {"action": "hold"}
 
 
+def test_orb_v2_enters_short_on_breakdown_below_range_low():
+    strat = _seed_gap_ok_orb_v2(day1_close=100.0)
+    strat.signal(tick(99.0, "09:16:00"), {}, None)  # 1% gap down, passes gap filter
+    strat.signal(tick(98.0, "09:29:00"), {}, None)  # range 98.0-99.0, ~1% width, passes range floor
+
+    result = strat.signal(tick(97.8, "09:32:00"), {}, None)  # < 98.0*0.9995
+
+    assert result["action"] == "enter"
+    assert result["side"] == "short"
+    assert result["stop_loss_pct"] == pytest.approx((99.0 - 97.8) / 97.8 * 100)
+
+
+def test_orb_v2_short_position_exits_at_range_derived_target_when_price_falls():
+    strat = ORBv2Strategy()
+    strat._entry_side = "short"
+    strat._entry_target_price = 90.0
+    strat._entry_stop_price = 110.0
+
+    result = strat.signal(tick(85.0), {}, {"entry_price": 100.0})  # fell past target - long-style ">=" would wrongly hold here
+
+    assert result == {"action": "exit", "reason": "target"}
+
+
+def test_orb_v2_short_position_exits_at_stop_when_price_rises():
+    strat = ORBv2Strategy()
+    strat._entry_side = "short"
+    strat._entry_target_price = 90.0
+    strat._entry_stop_price = 110.0
+
+    result = strat.signal(tick(115.0), {}, {"entry_price": 100.0})  # rose past stop - long-style "<=" would wrongly hold here
+
+    assert result == {"action": "exit", "reason": "stop_loss"}
+
+
+def test_orb_v2_full_signal_sets_short_side_state_used_by_exit_branch():
+    strat = _seed_gap_ok_orb_v2(day1_close=100.0)
+    strat.signal(tick(99.0, "09:16:00"), {}, None)
+    strat.signal(tick(98.0, "09:29:00"), {}, None)
+    strat.signal(tick(97.8, "09:32:00"), {}, None)  # real breakdown entry, sets _entry_side via the actual code path
+
+    result = strat.signal(tick(96.0), {}, {"entry_price": 97.8})  # further favorable move for a short
+
+    assert result["action"] == "exit"
+
+
 def test_orb_v2_exits_at_range_derived_target():
     strat = ORBv2Strategy()
     strat._entry_target_price = 110.0

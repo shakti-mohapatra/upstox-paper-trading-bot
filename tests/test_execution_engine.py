@@ -188,6 +188,53 @@ def test_on_tick_entry_sizing_uses_strategys_stop_loss_pct_override(tmp_path):
     assert expected_qty != size_position(capital=100000.0, risk_pct=0.01, entry_price=100.5, stop_loss_pct=0.5, buying_power=100000.0)
 
 
+class FakeShortStrategy:
+    """Enters short unconditionally, exits on a caller-supplied price - lets
+    tests drive the engine's short-side order/fill/pnl logic directly."""
+
+    def __init__(self, exit_price):
+        self.exit_price = exit_price
+
+    def new_day(self):
+        pass
+
+    def signal(self, tick, params, position):
+        if position is not None:
+            if tick["ltp"] == self.exit_price:
+                return {"action": "exit", "reason": "test_exit"}
+            return {"action": "hold"}
+        return {"action": "enter", "side": "short", "stop_loss_pct": 5.0}
+
+
+def test_on_tick_opens_short_position_with_sell_order(tmp_path):
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path, max_position_qty=100000)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path, strategy=FakeShortStrategy(exit_price=90.0))
+    engine.load_params()
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.0})
+
+    assert broker.calls == [(INSTRUMENT, "SELL", broker.calls[0][2], 100.0)]
+    assert engine.position["side"] == "short"
+
+
+def test_on_tick_closes_short_with_buy_order_and_profits_when_price_falls(tmp_path):
+    path = str(tmp_path / "strategy_params.json")
+    write_params(path, max_position_qty=100000)
+    broker = FakeBroker()
+    engine = ExecutionEngine(broker=broker, params_path=path, strategy=FakeShortStrategy(exit_price=90.0))
+    engine.load_params()
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 100.0})  # short entry at 100
+    qty = engine.position["qty"]
+
+    engine.on_tick({"instrument": INSTRUMENT, "ltp": 90.0})  # price fell -> short profits
+
+    assert broker.calls[-1] == (INSTRUMENT, "BUY", qty, 90.0)
+    assert engine.position is None
+    assert engine.realized_pnl_today > 0  # sold high (100), bought back low (90), net of costs still positive
+
+
 def test_on_tick_does_not_re_enter_while_already_in_position(tmp_path):
     path = str(tmp_path / "strategy_params.json")
     write_params(path)

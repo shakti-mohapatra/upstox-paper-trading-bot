@@ -98,6 +98,7 @@ class ORBv2Strategy(Strategy):
         self.range_high: float | None = None
         self.range_low: float | None = None
         self.gap_ok: bool | None = None
+        self._entry_side: str | None = None
         self._entry_target_price: float | None = None
         self._entry_stop_price: float | None = None
 
@@ -106,10 +107,16 @@ class ORBv2Strategy(Strategy):
         tick_time = _tick_time(tick)
 
         if position is not None:
-            if ltp >= self._entry_target_price:
-                return {"action": "exit", "reason": "target"}
-            if ltp <= self._entry_stop_price:
-                return {"action": "exit", "reason": "stop_loss"}
+            if self._entry_side == "short":
+                if ltp <= self._entry_target_price:
+                    return {"action": "exit", "reason": "target"}
+                if ltp >= self._entry_stop_price:
+                    return {"action": "exit", "reason": "stop_loss"}
+            else:
+                if ltp >= self._entry_target_price:
+                    return {"action": "exit", "reason": "target"}
+                if ltp <= self._entry_stop_price:
+                    return {"action": "exit", "reason": "stop_loss"}
             if tick_time is not None and tick_time >= self.MAX_HOLD_TIME:
                 return {"action": "exit", "reason": "max_hold"}
             return {"action": "hold"}
@@ -141,16 +148,28 @@ class ORBv2Strategy(Strategy):
             return {"action": "hold"}
 
         breakout_price = self.range_high * (1 + self.CONFIRM_PCT)
-        if ltp <= breakout_price:
-            return {"action": "hold"}
+        if ltp > breakout_price:
+            self._entry_side = "long"
+            self._entry_target_price = max(
+                ltp + range_width * self.TARGET_RANGE_MULT,
+                ltp * (1 + self.MIN_TARGET_PCT),
+            )
+            self._entry_stop_price = self.range_low
+            stop_loss_pct = (ltp - self.range_low) / ltp * 100
+            return {"action": "enter", "stop_loss_pct": stop_loss_pct}
 
-        self._entry_target_price = max(
-            ltp + range_width * self.TARGET_RANGE_MULT,
-            ltp * (1 + self.MIN_TARGET_PCT),
-        )
-        self._entry_stop_price = self.range_low
-        stop_loss_pct = (ltp - self.range_low) / ltp * 100
-        return {"action": "enter", "stop_loss_pct": stop_loss_pct}
+        breakdown_price = self.range_low * (1 - self.CONFIRM_PCT)
+        if ltp < breakdown_price:
+            self._entry_side = "short"
+            self._entry_target_price = min(
+                ltp - range_width * self.TARGET_RANGE_MULT,
+                ltp * (1 - self.MIN_TARGET_PCT),
+            )
+            self._entry_stop_price = self.range_high
+            stop_loss_pct = (self.range_high - ltp) / ltp * 100
+            return {"action": "enter", "side": "short", "stop_loss_pct": stop_loss_pct}
+
+        return {"action": "hold"}
 
 
 class MACrossoverStrategy(Strategy):
