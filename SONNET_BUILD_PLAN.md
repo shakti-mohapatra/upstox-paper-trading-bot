@@ -7,7 +7,87 @@ decisions) alongside it — this file is the *build sequence*; `PLAN.md` is the
 
 **Owner:** shaktibuilds · **Repo:** `E:\Trading-bot` (public GitHub
 `shakti-mohapatra/upstox-paper-trading-bot`) · **Written:** 2026-07-15 (planning
-session, Opus). Nothing in this plan was implemented yet.
+session, Opus) · **Last revised:** 2026-07-16 night (review session, Opus).
+
+---
+
+# 🚦 START HERE task list — ALL 7 TASKS DONE 2026-07-17. Read this before assuming anything below is still open.
+
+Everything below this block is context (mostly historical now). It was
+produced by a full code review on 2026-07-16 night in which every claim was
+verified by running the real code, not inferred.
+
+### The ORB "no edge" verdict is no longer void — it was re-measured for real (task 5) and confirmed.
+
+If you have read anywhere in this repo (or in memory) that "plain ORB has no
+real edge" from **2026-07-16 or earlier**, that specific number was void (see
+§3 Phase 2 autopsy). It has since been **re-run on the fixed engine
+(2026-07-17)** and the same conclusion came back, this time arithmetically
+sane and cost-corroborated: **13/13 windows net-negative, holdout 121 trades,
+net_pnl -₹5699.40, cost_pct 0.077%, win_rate 16.5%.** Treat this as real.
+
+| # | Task | Status |
+|---|---|---|
+| **1** | Fix the daily reset (`on_tick` rollover: `trades_today`/`realized_pnl_today`/`consecutive_losses`/`halted` reset, `strategy.new_day()`). | ✅ Done. `test_engine_resets_daily_state_across_days` + a follow-up regression test (first-ever tick must NOT wipe pre-seeded strategy state, e.g. a backfilled `orb_high` — caught during task 6). |
+| **2** | Merge `tick_archiver` into `main.py`. One process, one login, one socket. | ✅ Done. `tick_archiver.py` now exports pure helpers only (`make_on_tick`, `archive_path`, `append_tick`, `seconds_until_market_open`); `main.build_system()` archives every tick unconditionally before `engine.on_tick()`. |
+| **3** | Move `auth.login()` before the market-open wait. | ✅ Done. `main.py` now has a `main()` entrypoint: login → wait → run. |
+| **4** | Fix sizing: `write_params()` preserves `max_position_qty` across restarts instead of resetting to the stub; `MIN_TURNOVER` check moved to execution_engine, after the `max_position_qty` cap. | ✅ Done. Also bumped the actual stub default (and `strategy_params.json`/`.example.json`) from the degenerate `1` to `1000` (a non-binding safety ceiling — `position_sizing.size_position` does the real risk-based capping). |
+| **5** | Re-run the walk-forward. | ✅ Done, see verdict above. |
+| **6** | Dress rehearsal on real archived ticks (1,912 real ticks, 2026-07-16). | ✅ Done — 2 trades, qty=15, no crash, `halted=False`. Surfaced the first-tick regression fixed in task 1. |
+| **7** | Ask the user: forward paper vs strategy #2. | ✅ Done — user chose **strategy #2**. |
+
+**106 tests green** (was 100 at the start of 2026-07-17's session). Nothing
+committed, nothing pushed, no live process touched, per standing instruction.
+
+**Strategy #2 DONE 2026-07-17 (same session)** — user picked **MA crossover**
+(9/21 EMA, hardcoded periods like ORB's window constants; reuses
+`target_pct`/`stop_loss_pct`/`trail_pct` from the same frozen params schema so
+`walk_forward.py`'s existing grid needed zero changes). New
+`MACrossoverStrategy` in `strategy.py` (TDD, 5 tests: enters on a confirmed
+bullish EMA cross, exits on bearish cross or the same target/stop/trailing
+math as ORB). Wired into `backtest.STRATEGIES` and a new `--strategy` flag on
+`walk_forward.py` (`functools.partial(evaluate, strategy_cls=...)`, threaded
+into both the per-window search and the holdout call — the holdout call was
+still hardcoded to bare `evaluate()` before this, a latent bug that would have
+silently graded every non-default strategy's holdout as ORB).
+
+**Real comparison, same grid/windows/holdout as ORB's baseline:**
+| | ORB | MA crossover (9/21 EMA) |
+|---|---|---|
+| Windows net-negative | 13/13 | 13/13 |
+| Holdout trades | 121 | 220 |
+| Holdout net_pnl | -₹5699.40 | -₹10555.28 |
+| Holdout win_rate | 16.5% | 12.7% |
+| Holdout max_drawdown | ₹5840 | ₹10643 |
+| cost_pct | 0.077% | 0.077% (same sizing, confirms cost isn't the differentiator) |
+
+**MA crossover is worse than ORB on every metric** — roughly double the
+trades (whipsaw-prone with no noise filter on 1-min bars) at a lower win rate
+and bigger drawdown. Both strategies are net-negative; ORB remains the
+(still-negative) baseline to beat.
+
+**Next:** ask the user before building strategy #3 (VWAP mean-reversion or
+momentum) or moving to forward-paper. Multi-instrument, `full`/depth
+subscription, and the live gate remain out of scope until a strategy clears
+the negative baseline.
+
+### The dashboard (already built, needs one small thing)
+
+`dashboard.html` exists at repo root — single file, zero deps, verified working
+across live/frozen/offline states. Serve with
+`.venv\Scripts\python.exe -m http.server 8000`, open
+`http://127.0.0.1:8000/dashboard.html`.
+
+It reads `logs/status.json`, **which does not exist yet.** Add a ~15-line
+writer (reuse `analytical_bridge.py`'s existing `os.replace` atomic-write
+pattern — do not invent a new one), called from `on_tick`, throttled to ~1/sec.
+
+> **Contract rule, learned the hard way while building it:** status.json must
+> carry **absolute epoch stamps** (`written_at`, `last_tick_at`,
+> `archiver.last_write_at`) and **never self-reported ages**. A dead process
+> reports "1s ago" forever. The dashboard derives every age itself so a stopped
+> writer visibly ages and flips to FROZEN. Fields it expects are documented by
+> the reads in `dashboard.html`'s `render()`.
 
 ---
 
@@ -41,24 +121,52 @@ feature early.
 
 ## 1. Current code state (what exists, what's broken)
 
-Clean two-layer scaffold, 34 tests green, TDD throughout. Architecture is good;
-the gaps are *completeness*, not rot. Deep review found these — fix them in the
-phases below, not ad hoc:
+Two-layer scaffold + Phase 0 (honest accounting) + Phase 1 (strategy
+interface, replay harness, historical-data fetch) done, **100 tests green**,
+TDD throughout. Architecture is genuinely good; the gaps are *completeness*,
+not rot.
+
+> ### ⚠️ Read this before you trust the green test suite
+> **100 tests pass in 0.73s and every state bug in the table below is invisible
+> to all of them.** Reason: *every* test builds a fresh `ExecutionEngine` and
+> feeds it a single day of ticks. The real production path — live **and**
+> backtest — is **one engine instance eating months**. **Zero tests exercise
+> the way the code actually runs.** Green here has meant nothing so far; it is
+> what produced the false confidence behind the void Phase-2 verdict. The first
+> task in START HERE exists to close exactly this gap.
+
+**Session-10 review (2026-07-16 night) findings — all verified by running the
+real code, not inferred:**
 
 | Sev | Finding | Where |
 |---|---|---|
-| 🔴 | **PnL ignores all costs** (brokerage/STT/exchange/GST/stamp). Every recorded number is optimistic. | `execution_engine.py:58` |
+| 🔴 | **No concept of a trading day — the root cause.** `orb_high`, `trades_today`, `realized_pnl_today`, `consecutive_losses`, `halted` are assigned in `__init__` and **nowhere else** (grep-confirmed). Four bugs, one absence. Probe: 12 days of entry opportunities → **3 entries**. | `execution_engine.py:47`, `strategy.py:38` |
+| 🔴 | ↳ **`halted` is a permanent latch.** 3 consecutive losses at 9:45 kills the bot **forever**, silently — it keeps consuming ticks and does nothing. Not per-day, not per-session. | `execution_engine.py:134` |
+| 🔴 | ↳ **`orb_high` becomes a running all-time max.** It is not an opening-range breakout, it's "buy at a new all-time high." Day 2's legitimate breakout returns `hold`. Explains the absurd trade counts (7 in 90 days). | `strategy.py:58` |
+| 🔴 | ↳ **`MAX_TRADES_PER_DAY=5` is a lifetime cap**, not a daily one. | `execution_engine.py:90` |
+| 🔴 | **`write_params()` reverts tuned params on every boot** — runs on every `build_system()`, rewriting `max_position_qty` back to the stub `1`. Fixing the value by hand is silently undone next start. | `analytical_bridge.py:14`, `main.py:39` |
+| 🔴 | **`MIN_TURNOVER` guard is defeated** — checked *inside* `size_position` before the engine applies `min(risk_qty, max_position_qty)`, so it protects a number that gets thrown away. | `position_sizing.py:15`, `execution_engine.py:104` |
+| 🟡 | **`run_forever` hot-loops on clean disconnect** — `attempt=0` with **no sleep** on the success path. At 15:30 the socket closes normally → hammers the authorize REST endpoint all night. Rate-limit/ban risk. *(Session 3 fixed the backoff reset and introduced this.)* | `websocket_listener.py:77` |
+| 🟡 | **`tick_archiver` logs in AFTER sleeping to 9:15** → you paste OAuth while the opening range burns. 2026-07-16 archive starts **09:48, 0 ORB ticks**. | `tick_archiver.py:56` |
+| 🟡 | **A tick with `ts=None` skips the ORB gate entirely** and falls through to the wide-open `entry_zone` stub (0→1,000,000) and **buys**. Landmine. | `strategy.py:60` |
+| 🟡 | **Cost model conflict, still unresolved** — `costs.py` brokerage 0.05% vs `trading_bot_mandatory_rules.md` 0.1%. **Verify against a real contract note.** (Open since session 8.) | `costs.py:6` |
+
+**Earlier review findings (2026-07-15), still tracked:**
+
+| Sev | Finding | Where |
+|---|---|---|
+| ✅ | ~~PnL ignores all costs~~ — fixed Phase 0, `costs.py` net-of-cost every fill. | `execution_engine.py:58` |
 | 🔴 | **No slippage/spread** — fills at `ltp` for both sides. `ltpc` feed has no bid/ask, so spread is unmodelable until subscription → `full`/depth. | `broker/paper.py:16`, `websocket_listener.py:57` |
-| 🔴 | **No intraday square-off / no time awareness** — MIS not flattened → auto-square penalty or delivery conversion (margin call risk). | `execution_engine.py:30` |
-| 🔴 | **No position sizing** — `qty = max_position_qty = 1` hardcoded. No capital/risk/stop-distance sizing. | `execution_engine.py:42` |
+| ✅ | ~~No intraday square-off / no time awareness~~ — fixed Phase 0, 15:15 hard square-off + no entries after 15:00. | `execution_engine.py:30` |
+| ✅ | ~~No position sizing~~ — fixed Phase 0, `position_sizing.py` risk-based sizer. | `execution_engine.py:42` |
 | 🔴 | **Broker interface too thin for live** — `place_order(instrument, side, qty, price)` has no product (MIS/CNC), order type (MKT/LIMIT), validity. Live adapter can't be a one-line swap. | `broker/base.py:12` |
 | 🔴 | **Basket can't trade** — engine filters ticks to a single `params["instrument"]` and holds one `self.position`. | `execution_engine.py:33`, `main.py:24` |
-| 🔴 | **No strategy abstraction** — the entry/exit rule is hardcoded inside `on_tick`. Can't compare N strategies. | `execution_engine.py:30` |
+| ✅ | ~~No strategy abstraction~~ — fixed Phase 1, `strategy.py` `Strategy`/`ORBStrategy`, engine takes `strategy=` injection. | `execution_engine.py:30` |
 | 🔴 | **Combined strategies corrupt state** — single `self.position`; two strategies on one stock overwrite each other. | `execution_engine.py:44` |
-| 🔴 | **No replay/backtest path** — only forward live ticks. | (missing) |
-| 🟡 | **No logging** — `logs/` empty; engine/broker log nothing. Can't tune what you didn't record. | engine/broker |
+| ✅ | ~~No replay/backtest path~~ — fixed Phase 1, `backtest.py` (`run_backtest`/`summarize`/CLI) + `historical_data.py` (Upstox V3 candle fetch). | (missing) |
+| 🟡 | **No logging** — `logs/` empty; engine/broker log nothing beyond `run_forever`'s connect-failure logging. Can't tune what you didn't record. | engine/broker |
 | 🟡 | **Params never reload** — `load_params()` runs once in `build_system`; `on_tick` never re-reads. | `main.py:22`, `execution_engine.py:30` |
-| 🟡 | **Stub buys on first tick** — `entry_zone` = `0 … 1e6` → always true → blind entry at 9:15. | `analytical_bridge.py:21` |
+| ✅ | ~~Stub buys on first tick~~ — fixed Phase 0/1, real ORB gate (`strategy.py` `ORBStrategy`) replaces the always-true `entry_zone` stub. | `analytical_bridge.py:21` |
 | 🟡 | **Token-expiry not handled** — 401 swallowed by broad `except` in `run_forever` → hot reconnect loop, not "stop cleanly + re-login". | `websocket_listener.py:75` |
 | 🟡 | **No overfitting guard** — testing many strategies × combos on limited data manufactures false winners. | (methodology) |
 | 🟢 | Per-tick exceptions look like network drops; no gap-detect; `place_order(SELL)` with no prior BUY drives phantom short. | listener/paper |
@@ -135,35 +243,106 @@ Everything downstream measures with these, so build them first.
 *Proof:* a scripted tick sequence produces a CSV log with correct net-of-cost
 PnL; square-off fires; kill switch fires at the daily-max threshold.
 
-### Phase 1 — Strategy interface + replay harness + data
-- **`Strategy` interface**: `signal(state) -> intent` (enter/exit/hold), pulled
-  OUT of `on_tick`. Engine executes intents; strategy only decides. This is what
-  makes N strategies comparable and combinable.
-- **Replay harness** `backtest.py`: feed the *same* engine a CSV of historical
-  candles instead of a live socket — same `on_tick`, different source. Runs a
-  strategy over months of history in seconds, emitting the Phase-0 trade log +
-  summary metrics (net PnL, cost%, win rate, avg R, max drawdown, #trades).
-- **Historical data**: source it (see §4 open decision — candle vs tick,
-  Upstox historical-candle API vs saved CSV). Decide fidelity before building the
-  harness around it.
+### Phase 1 — Strategy interface + replay harness + data — DONE (code), data-fetch blocked on user
+- ✅ **`Strategy` interface** (`strategy.py`): `Strategy.signal(tick, params, position) ->
+  {"action": ...}`, pulled OUT of `on_tick`. `ExecutionEngine` takes `strategy=`
+  (defaults to `ORBStrategy`), executes intents; strategy only decides.
+- ✅ **Replay harness** `backtest.py`: `run_backtest()` feeds the *same*
+  `ExecutionEngine` a CSV of historical candles instead of a live socket — same
+  `on_tick`, different source. `summarize()` computes net PnL, cost%, win rate,
+  max drawdown, #trades from the Phase-0 trade log. CLI wired: `python
+  backtest.py --strategy orb --data <csv>` prints the summary as JSON.
+- ✅ **Historical-data fetch** `historical_data.py`: Upstox V3
+  `historical-candle` API (`/v3/historical-candle/{instrument_key}/{unit}/{interval}/{to_date}/{from_date}`,
+  verified against live docs 2026-07-16 — 1-min data available from Jan 2022,
+  max 1 calendar month per request). `fetch_candles()` chunks a multi-month
+  range into monthly requests and merges+sorts; `save_candles_csv()` writes
+  the exact schema `backtest.load_candles()` reads. CLI: `python
+  historical_data.py --instrument <key> --from-date YYYY-MM-DD --to-date
+  YYYY-MM-DD --out <csv>` — calls `auth.login()` internally (user's manual
+  OAuth step, prints URL + prompts for the `code=` paste).
+- ⏳ **Not yet run for real** — fetching *actual* history needs today's Upstox
+  token (daily re-login, user's step, not automatable). Once logged in: `python
+  historical_data.py --instrument NSE_EQ|INE002A01018 --from-date <30d-ago>
+  --to-date 2026-07-16 --out reliance_2026-07.csv` then `python backtest.py
+  --strategy orb --data reliance_2026-07.csv` is the literal Phase 1 proof.
+- ⏳ **Deferred, not blocking**: archiving real live ticks in parallel
+  (SONNET_BUILD_PLAN.md §4 item 2) — also needs a live session/token, do
+  alongside the first real data-fetch run rather than as separate work.
 
 *Proof:* `python backtest.py --strategy orb --data reliance_<period>.csv` prints
-a net-of-cost trade log + summary for one strategy over real history.
+a net-of-cost trade log + summary for one strategy over real history. **Code
+side done and tested (71 tests green); the "over real history" half needs the
+user to run today's OAuth login first.**
 
-### Phase 2 — Strategy search (offline) with overfitting + regime guards
-- Implement a starter set of strategies (confirm set with user, §4).
-- **Walk-forward** validation (rolling train/test windows), not a single
-  in-sample fit.
-- **Out-of-sample holdout** kept untouched until the very end.
-- **Minimum-trades threshold** (~30+) before any strategy is eligible to "win".
-- **Regime coverage**: run across trending / ranging / high-vol / crash periods
-  if data allows; a winner must survive more than one regime.
-- Rank by **cost-adjusted** metrics at both ₹1L and ₹5k profiles. Then evaluate
-  **combinations** (portfolio/ensemble) — needs the multi-strategy state from
-  Phase 3's engine work or a simplified offline allocator; decide at that point.
+### Phase 2 — Strategy search (offline) with overfitting + regime guards — IN PROGRESS
+- ✅ **Walk-forward harness** `walk_forward.py` (2026-07-16, session 6): rolling
+  train/test windows (`date_windows`), param grid (`param_grid`), per-window
+  best-by-train-net-pnl selection gated by `min_trades` (`run_walk_forward`,
+  `evaluate`), untouched OOS holdout carved off the tail of the data before
+  search starts, CLI (`python walk_forward.py --data <csv> --params <json>
+  --min-trades N`). 8 tests, TDD throughout.
+- ⛔ **First real run 2026-07-16 — RESULT VOID, WITHDRAWN 2026-07-16 night.**
+  The run happened (ORB only, 3×2×2=12 grid, 13 windows over
+  `reliance_full.csv`, 90-day holdout) and reported "no real edge": 12/13
+  windows net-negative, holdout -₹33.11 / 39 trades / 30.8% win rate. **That
+  conclusion is withdrawn.** It is invalid for four independent reasons, each
+  sufficient on its own:
+  1. **Stale binary.** `walk_forward_run1.log` is timestamped **07:23**;
+     `execution_engine.py` is **09:23** and `strategy.py` is **10:03**. The code
+     changed underneath the number and it was never re-run.
+  2. **The number is arithmetically impossible.** 39 holdout trades cannot
+     happen: `halted` latches **permanently** after 3 consecutive losses, and at
+     the reported 30.8% win rate that fires almost immediately (~3–6 trades
+     max). Verified by probe. **Nobody checked whether the result was even
+     possible** — a ten-second sanity check would have caught the entire thing.
+  3. **qty=1 on every single trade.** `max_position_qty:1` in the stub caps the
+     sizer's ~15, so every fill was ~₹1,300 turnover → **0.35% round-trip cost**
+     instead of 0.083%. `trading_bot_mandatory_rules.md`'s own headline is
+     *"costs kill ORB edge in India at small position sizes"* — the bot traded
+     exactly the size that doc forbids, then the result was read as a verdict on
+     the strategy rather than on the sizing.
+  4. **The strategy under test was not ORB.** Rules doc §4A specifies 15-min
+     candles, gap filter 0.3–2.0%, skip-if-range<0.3%, stop = other side of the
+     range, target = 1.5× range width, max hold 11:00, long **and** short.
+     `strategy.py` implements **none** of them (1-min closes, no filters, fixed
+     0.5% stop, fixed 1.0% target, long only). *(Corollary: the "doc contradicts
+     backtest" contradiction the graphify graph surfaced was never a real
+     contradiction — the two were never describing the same strategy.)*
+
+  **Current status: no conclusion about ORB exists.** Re-running the search is
+  START-HERE task 5 and is blocked only on task 1.
+- ✅ **Re-run 2026-07-17, after tasks 1-4 fixed (day-reset, sizing) — this is
+  the first trustworthy number.** Same grid/windows/holdout as above, on the
+  fixed engine (qty=15 real risk-based sizing, not 1; no permanent halt
+  latch). **13/13 windows net-negative** (was 12/13 on the void run).
+  Holdout: **121 trades, net_pnl=-₹5699.40, cost_pct=0.077%** (matches the
+  session-7 hand-derived ~0.083% estimate — a real corroboration, not just
+  plausible-shaped), win_rate=16.5%, max_drawdown=₹5840. 121 trades over a
+  90-day holdout (~2/trading-day) is arithmetically sane, unlike the void
+  run's impossible 39. **Verdict: plain ORB (fixed target/stop/trail, long
+  only) has no real edge on RELIANCE 1-min. This time it's real.** Also
+  re-verified live: replayed the 1,912 real archived ticks from 2026-07-16
+  through the fixed engine (`ORBStrategy` seeded with the session-9-verified
+  real `orb_high=1304.0`) — 2 trades, qty=15, no crash, `halted=False`.
+  Surfaced one more real bug while doing this: the day-rollover reset was
+  firing on the **very first tick ever** (not just on genuine day changes),
+  wiping any pre-seeded `orb_high` from `main.maybe_backfill_orb` before a
+  single tick was processed. Fixed (only reset on `current_day is not None`
+  transitions) + regression test added.
+- ✅ **Unblocked 2026-07-17** — user chose to proceed to strategy #2 now that
+  task 5 produced a real ORB number (asked per task 7, not assumed).
+- ⏳ **Not started**: regime coverage (trending/ranging/high-vol/crash
+  labeling) — soft requirement ("if data allows"); the 13 rolling windows
+  already span very different 2023–2026 market conditions implicitly, but no
+  explicit regime tagging exists yet.
+- ⏳ **Not started**: ranking table across strategies + combinations — moot
+  until a second strategy exists to rank against ORB.
 
 *Proof:* a ranked table of strategies (solo + top combos) with OOS metrics; a
-clearly documented shortlist of 2–3 survivors.
+clearly documented shortlist of 2–3 survivors. **Partial**: ORB's OOS
+verdict is documented above (a clear "no," not a survivor) — the ranked
+table still needs a second strategy to be a real comparison.
 
 ### Phase 3 — Forward paper validation (₹1L, multi-instrument, multi-strategy)
 - Refactor engine to **multi-instrument** (positions keyed by instrument) and
@@ -225,6 +404,40 @@ log.
 ---
 
 ## 5. Working conventions (this repo)
+
+### 🔍 Rule 0 — interrogate every number before it becomes a belief
+
+**This is the most important rule in this file. It outranks the build sequence.**
+
+The 2026-07-16 failure was not a bug. A number came out of a harness, it was
+plausible-shaped and pessimistic, and it was promoted straight to a conclusion
+and written into *this file* — the document whose entire job is briefing a fresh
+session. Nobody asked what produced it. Nobody asked whether it was **possible**.
+It wasn't: 39 trades under a permanently-latching kill switch at a 30% win rate
+is arithmetically impossible, catchable in ten seconds. The bugs cost a day. The
+procedure cost the truth, and it is the part that survives every fix.
+
+**So: when any number arrives — from a backtest, a paper session, a doc, a
+previous session's write-up, an AI, or your own code — before it becomes a
+belief, ask:**
+1. **What produced this?** Is the code that emitted it the code on disk *right
+   now*? Check timestamps. `walk_forward_run1.log` (07:23) vs
+   `execution_engine.py` (09:23) would have exposed the whole thing.
+2. **Is it even possible?** Do the arithmetic on the constraints. Does the trade
+   count make sense for the strategy's own logic? A *daily* breakout strategy
+   taking 7 trades in 90 days is a screaming red flag, not a data point.
+3. **Is the thing measured the thing named?** "ORB" in the code shared almost
+   nothing with "ORB" in the rules doc. Compare implementation to spec before
+   attributing a result to the spec.
+4. **Does a green test suite actually cover this?** It didn't. It never did.
+
+**Green tests are not evidence.** 100 passed while the bot couldn't trade a
+second day. Nothing checked the checker.
+
+**A number you haven't interrogated must be written down as an observation, never
+as a conclusion**, and never in a way a future session will inherit as fact.
+
+### Other conventions
 
 - **TDD Guard is wired** (`pyproject.toml: tdd_guard_project_root = "E:/"` — the
   session root, NOT the repo root; this gotcha already bit once). Test-first.

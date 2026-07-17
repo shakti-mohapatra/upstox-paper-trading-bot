@@ -1,0 +1,288 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>JARVIS-Trader</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#12151a; --line:#20262f; --dim:#6b7684; --fg:#e6eaf0;
+    --ok:#3fb950; --warn:#d29922; --bad:#f85149; --idle:#39414d; --accent:#58a6ff;
+    --mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);font:13px/1.5 var(--mono);padding:16px;
+       -webkit-font-smoothing:antialiased}
+  .grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));max-width:1400px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-width:0}
+  .card h2{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+  .big{font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.15;overflow-wrap:anywhere}
+  .sub{font-size:11px;color:var(--dim);margin-top:3px;overflow-wrap:anywhere}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:3px 0}
+  .row span:last-child{color:var(--fg);text-align:right}
+  .row span:first-child{color:var(--dim)}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .idle{color:var(--idle)}
+  .span2{grid-column:span 2} @media(max-width:640px){.span2{grid-column:span 1}}
+  /* banner: the one thing that must never be missed */
+  #banner{border-radius:8px;padding:14px 16px;margin:0 auto 10px;max-width:1400px;font-size:15px;
+          font-weight:600;letter-spacing:.01em;display:none;border:1px solid}
+  #banner.show{display:block}
+  #banner.halt{background:#2d0f10;border-color:var(--bad);color:#ffb4ae}
+  #banner.stale{background:#2b2003;border-color:var(--warn);color:#f0d68a}
+  /* stale/offline: physically grey the numbers so they can never be read as live */
+  body.offline .grid{opacity:.4;filter:saturate(.25)}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;color:var(--dim);font-weight:500;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
+  td{padding:4px 8px 4px 0;border-bottom:1px solid #171b21;white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .scroll{overflow-x:auto}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
+  .bar{height:4px;background:var(--idle);border-radius:2px;overflow:hidden;margin-top:7px}
+  .bar>i{display:block;height:100%;border-radius:2px;transition:width .3s}
+  header{max-width:1400px;margin:0 auto 10px;display:flex;justify-content:space-between;
+         align-items:baseline;gap:12px;flex-wrap:wrap}
+  header b{font-size:14px;font-weight:600;letter-spacing:.02em}
+  header .meta{font-size:11px;color:var(--dim)}
+</style>
+
+<header>
+  <b>JARVIS-Trader <span class="idle">/ paper</span></b>
+  <span class="meta"><span id="phase">—</span> · <span id="clock">—</span> IST · updated <span id="age">—</span></span>
+</header>
+
+<div id="banner"></div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Engine</h2>
+    <div class="big" id="engine-state">—</div>
+    <div class="sub" id="engine-why">waiting for status.json</div>
+  </div>
+
+  <div class="card">
+    <h2>Feed</h2>
+    <div class="big" id="feed-ltp">—</div>
+    <div class="sub"><span class="dot" id="feed-dot"></span><span id="feed-age">no ticks</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Position</h2>
+    <div class="big" id="pos">—</div>
+    <div class="sub" id="pos-detail">—</div>
+  </div>
+
+  <div class="card">
+    <h2>Net P&amp;L today</h2>
+    <div class="big" id="pnl">—</div>
+    <div class="sub" id="pnl-detail">after costs</div>
+    <div class="bar"><i id="pnl-bar" style="width:0"></i></div>
+  </div>
+
+  <div class="card">
+    <h2>Opening range</h2>
+    <div class="big" id="orb">—</div>
+    <div class="sub" id="orb-detail">9:15–9:30 window</div>
+  </div>
+
+  <div class="card">
+    <h2>Budget</h2>
+    <div class="row"><span>trades</span><span id="trades">—</span></div>
+    <div class="row"><span>consec. losses</span><span id="losses">—</span></div>
+    <div class="row"><span>day</span><span id="day">—</span></div>
+    <div class="row"><span>token expires</span><span id="token">03:30</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Tick archiver</h2>
+    <div class="big" id="arch-rows">—</div>
+    <div class="sub"><span class="dot" id="arch-dot"></span><span id="arch-detail">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Session</h2>
+    <div class="row"><span>strategy</span><span id="strategy">—</span></div>
+    <div class="row"><span>instrument</span><span id="instrument">—</span></div>
+    <div class="row"><span>qty cap</span><span id="qtycap">—</span></div>
+    <div class="row"><span>uptime</span><span id="uptime">—</span></div>
+  </div>
+
+  <div class="card span2" style="grid-column:1/-1">
+    <h2>Fills today</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>time</th><th>side</th><th class="num">qty</th><th class="num">price</th>
+          <th class="num">gross</th><th class="num">cost</th><th class="num">net</th><th>reason</th>
+        </tr></thead>
+        <tbody id="fills"><tr><td colspan="8" class="idle">no fills yet</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const rs = n => (n<0?"−":"") + "₹" + Math.abs(n).toFixed(2);
+const cls = n => n > 0 ? "ok" : n < 0 ? "bad" : "idle";
+const ago = s => s == null ? "—" : s < 60 ? Math.round(s)+"s ago"
+              : s < 3600 ? Math.round(s/60)+"m ago" : Math.round(s/3600)+"h ago";
+
+// Market phase from IST wall clock - the dashboard owns this, the bot doesn't need to report it.
+function phase(d){
+  const m = d.getHours()*60 + d.getMinutes();
+  if (m < 555)  return ["pre-open","idle"];
+  if (m < 570)  return ["opening range","warn"];
+  if (m < 900)  return ["tradeable","ok"];
+  if (m < 915)  return ["no new entries","warn"];
+  if (m < 930)  return ["square-off","warn"];
+  return ["closed","idle"];
+}
+
+function banner(kind, text){
+  const b = $("banner");
+  if (!kind) { b.className = ""; return; }
+  b.className = "show " + kind;
+  b.textContent = text;
+}
+
+function render(s){
+  document.body.classList.remove("offline");
+
+  // Never trust an age the bot computed about itself - a dead process reports
+  // "1s ago" forever. Derive every age here from absolute epoch stamps, so a
+  // stopped writer visibly ages on screen instead of freezing.
+  const now = Date.now()/1000;
+  s.written_age_s = s.written_at   != null ? now - s.written_at   : null;
+  s.feed_age_s    = s.last_tick_at != null ? now - s.last_tick_at : null;
+  if (s.archiver && s.archiver.last_write_at != null)
+    s.archiver.age_s = now - s.archiver.last_write_at;
+
+  // ---- the one thing that must never be silent -----------------------------
+  // Order matters: a frozen file invalidates everything below it, so it outranks
+  // even HALTED - "restart required" is misleading advice if the process is gone.
+  const frozen = s.written_age_s != null && s.written_age_s > 30;
+  if (frozen) {
+    banner("stale", "⚠ STATUS FROZEN " + Math.round(s.written_age_s) +
+                    "s — bot stopped writing · everything below is last-known, NOT live");
+    document.body.classList.add("offline");
+  } else if (s.halted) {
+    banner("halt", "⛔ ENGINE HALTED — " + (s.halt_reason || "kill switch") +
+                   " · no further entries today · restart or reset required");
+  } else if (s.feed_age_s != null && s.feed_age_s > 90) {
+    banner("stale", "⚠ FEED STALE — no tick for " + Math.round(s.feed_age_s) +
+                    "s · socket may be down, check the console");
+  } else banner(null);
+
+  $("engine-state").textContent = s.halted ? "HALTED" : s.enabled === false ? "DISABLED" : "RUNNING";
+  $("engine-state").className = "big " + (s.halted ? "bad" : s.enabled === false ? "idle" : "ok");
+  $("engine-why").textContent = s.halted ? (s.halt_reason || "kill switch tripped")
+                              : "params v" + (s.params_version ?? "?") + " · " + (s.regime || "—");
+
+  // ---- feed ---------------------------------------------------------------
+  $("feed-ltp").textContent = s.ltp != null ? "₹" + s.ltp.toFixed(2) : "—";
+  const fresh = s.feed_age_s != null && s.feed_age_s < 15;
+  $("feed-dot").style.background = `var(--${fresh ? "ok" : s.feed_age_s < 90 ? "warn" : "bad"})`;
+  $("feed-age").textContent = s.last_tick_ts
+    ? s.last_tick_ts.slice(11,19) + " · " + ago(s.feed_age_s) : "no ticks";
+
+  // ---- position -----------------------------------------------------------
+  if (s.position) {
+    const p = s.position, u = (s.ltp - p.entry_fill) * p.qty;
+    $("pos").textContent = "LONG " + p.qty;
+    $("pos").className = "big";
+    $("pos-detail").innerHTML = `@ ₹${p.entry_price.toFixed(2)} · hw ₹${p.high_water.toFixed(2)}` +
+      ` · <span class="${cls(u)}">${rs(u)} unreal.</span>`;
+  } else {
+    $("pos").textContent = "FLAT";
+    $("pos").className = "big idle";
+    $("pos-detail").textContent = s.halted ? "halted — will not enter" : "no open position";
+  }
+
+  // ---- pnl ----------------------------------------------------------------
+  const pnl = s.realized_pnl_today ?? 0;
+  $("pnl").textContent = rs(pnl);
+  $("pnl").className = "big " + cls(pnl);
+  $("pnl-detail").textContent = `costs ${rs(s.costs_today ?? 0)} · kill at −${rs(s.daily_max_loss ?? 0)}`;
+  const frac = s.daily_max_loss ? Math.min(1, Math.max(0, -pnl / s.daily_max_loss)) : 0;
+  $("pnl-bar").style.width = (frac*100).toFixed(0) + "%";
+  $("pnl-bar").style.background = `var(--${frac > .75 ? "bad" : frac > .4 ? "warn" : pnl >= 0 ? "ok" : "warn"})`;
+
+  // ---- orb ----------------------------------------------------------------
+  $("orb").textContent = s.orb_high != null ? "₹" + s.orb_high.toFixed(2) : "—";
+  $("orb").className = "big" + (s.orb_high == null ? " idle" : "");
+  $("orb-detail").textContent = s.orb_high == null
+    ? (phase(new Date())[0] === "pre-open" ? "not set — market not open" : "NOT SET — no entries possible")
+    : (s.orb_source || "live 9:15–9:30") + (s.ltp > s.orb_high ? " · BROKEN ▲" : " · intact");
+
+  // ---- budget -------------------------------------------------------------
+  const t = s.trades_today ?? 0, mx = s.max_trades_per_day ?? 5;
+  $("trades").innerHTML = `<span class="${t >= mx ? "bad" : "ok"}">${t}/${mx}</span>`;
+  $("losses").innerHTML = `<span class="${(s.consecutive_losses ?? 0) >= 3 ? "bad"
+                          : (s.consecutive_losses ?? 0) > 0 ? "warn" : "idle"}">${s.consecutive_losses ?? 0}/3</span>`;
+  // proves the daily reset actually fired - the bug that ate today
+  $("day").textContent = s.current_day || "—";
+
+  // ---- archiver -----------------------------------------------------------
+  const a = s.archiver || {};
+  $("arch-rows").textContent = a.rows != null ? a.rows.toLocaleString() : "—";
+  const aFresh = a.age_s != null && a.age_s < 15;
+  $("arch-dot").style.background = `var(--${aFresh ? "ok" : a.age_s < 90 ? "warn" : "bad"})`;
+  $("arch-detail").textContent = a.rows == null ? "not writing"
+    : `${a.first_ts ? a.first_ts.slice(11,16) : "?"}→${a.last_ts ? a.last_ts.slice(11,16) : "?"}` +
+      ` · ${a.covers_orb ? "ORB captured" : "MISSED ORB"} · ${ago(a.age_s)}`;
+
+  // ---- session ------------------------------------------------------------
+  $("strategy").textContent  = s.strategy || "—";
+  $("instrument").textContent = (s.instrument || "—").split("|").pop();
+  $("qtycap").textContent = s.max_position_qty ?? "—";
+  $("uptime").textContent = s.uptime_s != null ? ago(s.uptime_s).replace(" ago","") : "—";
+
+  // ---- fills --------------------------------------------------------------
+  const f = s.fills || [];
+  $("fills").innerHTML = f.length ? f.slice(-12).reverse().map(r => `
+    <tr><td>${(r.ts||"").slice(11,19)}</td>
+        <td class="${r.side === "BUY" ? "accent" : ""}">${r.side}</td>
+        <td class="num">${r.qty}</td>
+        <td class="num">${(+r.intended).toFixed(2)}</td>
+        <td class="num ${cls(+r.gross)}">${(+r.gross).toFixed(2)}</td>
+        <td class="num warn">${(+r.cost).toFixed(2)}</td>
+        <td class="num ${cls(+r.net)}">${(+r.net).toFixed(2)}</td>
+        <td class="idle">${r.reason}</td></tr>`).join("")
+    : `<tr><td colspan="8" class="idle">no fills yet</td></tr>`;
+}
+
+async function tick(){
+  const d = new Date(Date.now() + (330 + new Date().getTimezoneOffset()) * 60000); // IST
+  $("clock").textContent = d.toTimeString().slice(0,8);
+  const [ph, phc] = phase(d);
+  $("phase").textContent = ph; $("phase").className = phc;
+
+  try {
+    const r = await fetch("logs/status.json?_=" + Date.now(), {cache:"no-store"});
+    if (!r.ok) throw new Error(r.status);
+    const s = await r.json();
+    render(s);
+    $("age").textContent = ago(s.written_age_s ?? 0);
+  } catch (e) {
+    // Bot not running is a normal state, not an error - say so plainly. But NEVER
+    // leave the last-known numbers on screen: a frozen "3s ago" over a dead bot is
+    // the exact lie this dashboard exists to prevent. Blank every live field.
+    banner("stale", "⚠ NO STATUS — logs/status.json unreadable · the bot is not running");
+    document.body.classList.add("offline");
+    for (const id of ["feed-ltp","pos","pnl","orb","arch-rows"]) {
+      $(id).textContent = "—"; $(id).className = "big idle";
+    }
+    for (const [id, t] of [["feed-age","no feed"],["pos-detail","—"],["pnl-detail","—"],
+                           ["orb-detail","—"],["arch-detail","not writing"]])
+      $(id).textContent = t;
+    for (const id of ["trades","losses","day","strategy","instrument","qtycap","uptime"])
+      $(id).textContent = "—";
+    for (const id of ["feed-dot","arch-dot"]) $(id).style.background = "var(--idle)";
+    $("pnl-bar").style.width = "0";
+    $("fills").innerHTML = `<tr><td colspan="8" class="idle">— bot offline —</td></tr>`;
+    $("engine-state").textContent = "OFFLINE";
+    $("engine-state").className = "big idle";
+    $("engine-why").textContent = "start main.py";
+    $("age").textContent = "never";
+  }
+}
+tick(); setInterval(tick, 2000);
+</script>

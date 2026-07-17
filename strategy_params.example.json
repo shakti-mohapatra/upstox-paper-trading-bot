@@ -8,6 +8,6 @@
   "target_pct": 1.0,
   "stop_loss_pct": 0.5,
   "trail_pct": 0.3,
-  "max_position_qty": 1,
+  "max_position_qty": 1000,
   "notes": "stub: static placeholder params, no live signal yet"
 }

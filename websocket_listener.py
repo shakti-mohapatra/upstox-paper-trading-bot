@@ -58,7 +58,7 @@ class WebSocketListener:
                     "data": {"mode": "ltpc", "instrumentKeys": self.instruments},
                 }
             )
-            await ws.send(subscribe_msg)
+            await ws.send(subscribe_msg.encode("utf-8"))  # Upstox v3 feed requires the subscribe frame as binary
             async for raw in ws:
                 for instrument, feed in decode_feed_response(raw).items():
                     ts = datetime.fromtimestamp(feed["ltt"] / 1000, tz=IST).isoformat()

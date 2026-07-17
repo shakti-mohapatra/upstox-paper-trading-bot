@@ -1,9 +1,18 @@
 # JARVIS-Trader — Project Plan
 
-**Status:** Fully wired (`main.py`), 34 tests green, kill switch + reconnect-backoff (resets on clean connect) in place; next = first real paper session against live Upstox
+**Status:** Fully wired, 100 tests green — **but see the warning below before trusting that.** Phase 0+1 done, Phase 2 search harness built. Live feed confirmed working 2026-07-16 (real ticks on disk).
+**Next action:** `SONNET_BUILD_PLAN.md` → **START HERE** block (day-reset fix, archiver merge, then re-run the search). Not a paper session yet.
 **Owner:** shaktibuilds
-**Created:** 2026-07-15
+**Created:** 2026-07-15 · **Last revised:** 2026-07-16 (review session)
 **Location:** `E:\Trading-bot`
+
+> **⚠️ "100 tests green" is not evidence of anything.** Every test builds a
+> fresh engine and feeds one day of ticks; the real path (live and backtest)
+> is one engine instance eating months. **Zero tests cover how the code
+> actually runs**, and the bot currently cannot trade a second day —
+> `orb_high`/`trades_today`/`halted` never reset, and `halted` latches
+> permanently. Full autopsy in `SONNET_BUILD_PLAN.md` §1. Read `§5 Rule 0`
+> before acting on any number in this repo.
 
 An algorithmic **paper-trading bot** for the Indian market (NSE) on the **Upstox
 Developer API V2**. Paper-trades locally at ₹0 cost for ~1 month to tune a
@@ -184,6 +193,21 @@ Both are ~5–10 lines, both needed even in the full Ollama version.
 
 ## 9. Gotchas bank
 
+- **The code has no concept of a trading day** — this is the root cause of four
+  separate state bugs and it is the single most important thing to know about
+  this codebase. Any per-day rule (opening range, max trades/day, daily loss,
+  consecutive losses) is currently **lifetime-scoped**. Every rule in
+  `trading_bot_mandatory_rules.md` is written in units of days; the code has no
+  such unit.
+- **`halted` latches forever.** Three consecutive losses kills the bot silently
+  and permanently — it keeps consuming ticks and does nothing. If a session
+  looks "quiet", check `halted` before believing the market was quiet.
+- **Upstox revokes the previous access token on a new login for the same
+  account.** Two processes calling `auth.login()` independently *cannot* both
+  hold a valid session — whichever logs in last kills the other. The fix is one
+  process, not a shared token file.
+- **Log in BEFORE waiting for market open**, never after — otherwise you paste
+  the OAuth code while the opening range burns.
 - Token dies 3:30 AM daily, no refresh token → daily re-login.
 - PC must stay awake 9:15–3:30 during paper phase (disable sleep) or ticks drop.
 - Sandbox fills are idealized — use local fill sim for tuning, not sandbox.

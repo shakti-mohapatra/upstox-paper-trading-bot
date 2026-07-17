@@ -96,6 +96,7 @@ def test_connect_subscribes_then_decodes_and_dispatches_ticks(monkeypatch):
 
     asyncio.run(listener.connect())
 
+    assert isinstance(fake_ws.sent[0], bytes)  # Upstox v3 feed requires the subscribe frame sent as binary, not text
     subscribed = json.loads(fake_ws.sent[0])
     assert subscribed["method"] == "sub"
     assert subscribed["data"] == {"mode": "ltpc", "instrumentKeys": ["NSE_EQ|abc"]}

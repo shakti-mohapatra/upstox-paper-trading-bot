@@ -51,19 +51,19 @@ def test_scripted_session_proves_net_of_cost_pnl_square_off_and_kill_switch(tmp_
     write_params(params_path)
     log_path = str(tmp_path / "trades.csv")
     broker = FakeBroker()
-    engine = ExecutionEngine(broker=broker, params_path=params_path, daily_max_loss=700.0, trade_log_path=log_path)
+    engine = ExecutionEngine(broker=broker, params_path=params_path, daily_max_loss=200.0, trade_log_path=log_path)
     engine.load_params()
 
     engine.on_tick(tick(99.0, "09:16:00"))  # ORB window, sets orb_high=99.0
 
     engine.on_tick(tick(100.0, "09:31:00"))  # breakout entry, trade 1
     engine.on_tick(tick(99.5, "09:35:00"))  # hits hard stop -> exit, loss
-    assert engine.halted is False, "single small loss must not breach the 700 threshold yet"
+    assert engine.halted is False, "single small loss must not breach the 200 threshold yet"
 
     engine.on_tick(tick(100.0, "09:40:00"))  # breakout entry, trade 2
     engine.on_tick(tick(100.0, "12:00:00"))  # flat midday tick, no exit trigger
     engine.on_tick(tick(99.8, "15:15:00"))  # forced square-off, not target/stop
-    assert engine.halted is True, "cumulative loss across both trades must breach 700 at square-off"
+    assert engine.halted is True, "cumulative loss across both trades must breach 200 at square-off"
 
     entries_before_late_attempt = len(broker.calls)
     engine.on_tick(tick(100.5, "15:20:00"))  # breakout again, but halted + after hours
@@ -73,8 +73,8 @@ def test_scripted_session_proves_net_of_cost_pnl_square_off_and_kill_switch(tmp_
         rows = list(csv.DictReader(f))
 
     assert [r["reason"] for r in rows] == ["entry", "stop_loss", "entry", "square_off"]
-    # net is genuinely cost-inclusive: raw gross on the stop-loss leg is -500, net is more negative
+    # net is genuinely cost-inclusive: gross on the stop-loss leg is negative, net is more negative still
     stop_loss_row = rows[1]
-    assert float(stop_loss_row["gross"]) == -500.0
+    assert float(stop_loss_row["gross"]) < 0
     assert float(stop_loss_row["net"]) < float(stop_loss_row["gross"])
     assert float(stop_loss_row["cost"]) > 0

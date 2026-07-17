@@ -8,16 +8,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from costs import costs
 
 
-def test_buy_leg_cost_includes_brokerage_exchange_sebi_stamp_and_gst_but_not_stt():
+def test_buy_leg_cost_includes_brokerage_exchange_sebi_ipft_stamp_and_gst_but_not_stt():
     # turnover = 10 * 100 = 1000, well under the Rs20 brokerage cap
     result = costs("BUY", qty=10, price=100.0)
 
     brokerage = 0.0005 * 1000
     exchange = 0.0000297 * 1000
     sebi = 0.000001 * 1000
+    ipft = 0.000001 * 1000
     stamp = 0.00003 * 1000
-    gst = 0.18 * (brokerage + exchange + sebi)
-    expected = brokerage + exchange + sebi + stamp + gst
+    gst = 0.18 * (brokerage + exchange + sebi + ipft)
+    expected = brokerage + exchange + sebi + ipft + stamp + gst
 
     assert result == pytest.approx(expected, rel=1e-9)
 
@@ -28,9 +29,10 @@ def test_sell_leg_cost_includes_stt_but_not_stamp():
     brokerage = 0.0005 * 1000
     exchange = 0.0000297 * 1000
     sebi = 0.000001 * 1000
+    ipft = 0.000001 * 1000
     stt = 0.00025 * 1000
-    gst = 0.18 * (brokerage + exchange + sebi)
-    expected = brokerage + exchange + sebi + stt + gst
+    gst = 0.18 * (brokerage + exchange + sebi + ipft)
+    expected = brokerage + exchange + sebi + ipft + stt + gst
 
     assert result == pytest.approx(expected, rel=1e-9)
 
@@ -43,8 +45,18 @@ def test_brokerage_is_capped_at_rs20_for_large_turnover():
     brokerage = 20.0
     exchange = 0.0000297 * turnover
     sebi = 0.000001 * turnover
+    ipft = 0.000001 * turnover
     stamp = 0.00003 * turnover
-    gst = 0.18 * (brokerage + exchange + sebi)
-    expected = brokerage + exchange + sebi + stamp + gst
+    gst = 0.18 * (brokerage + exchange + sebi + ipft)
+    expected = brokerage + exchange + sebi + ipft + stamp + gst
 
     assert result == pytest.approx(expected, rel=1e-9)
+
+
+def test_breakeven_win_rate_matches_mandatory_rules_example():
+    from costs import breakeven_win_rate
+
+    # 1.0% target / 0.5% stop / 0.083% cost -> ~38.9% breakeven (mandatory_rules.md §2)
+    result = breakeven_win_rate(target_pct=1.0, stop_loss_pct=0.5, cost_pct=0.083)
+
+    assert result == pytest.approx(0.389, abs=0.001)
